@@ -1,0 +1,506 @@
+<title>ROI Patch Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: ROI list | square slide stage (always dark, like a microscope field) | zoom + labelling panel */
+:root {
+  --bg: #f3f4f7; --panel: #ffffff; --fg: #1d2030; --muted: #5d6478; --line: #d9dce5;
+  --accent: #4a3d9a; --accent-fg: #ffffff; --stage: #16171c; --other: #8a94a6; --unsure: #a35bd8;
+  --ui: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121318; --panel: #1b1d24; --fg: #e8e9ef; --muted: #9aa0b3; --line: #2e313c;
+  --accent: #9d8ff0; --accent-fg: #14121f; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121318; --panel: #1b1d24; --fg: #e8e9ef; --muted: #9aa0b3; --line: #2e313c;
+  --accent: #9d8ff0; --accent-fg: #14121f; color-scheme: dark }
+
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.app { display: grid; grid-template-columns: 250px minmax(0, 1fr) 330px; gap: 16px; padding-block: 14px; height: 100%; box-sizing: border-box; }
+header.top { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+h1 { font-size: 20px; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); font-size: 13px; }
+.progress { margin-left: auto; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.source { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.source .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.source.live .dot { background: #36a457; }
+.save { font-size: 12px; color: var(--muted); }
+.save.err { color: #e0453a; }
+.banner { grid-column: 1 / -1; display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; }
+.banner.show { display: flex; }
+
+aside.list, .side { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-height: 0; }
+aside.list { display: flex; flex-direction: column; overflow: hidden; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); }
+.filters select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.rois { list-style: none; margin: 0; padding: 4px; overflow-y: auto; flex: 1; }
+.rois button { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.rois button:hover { background: var(--bg); }
+.rois button[aria-current="true"] { background: var(--accent); color: var(--accent-fg); }
+.rois button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rois .n { font-family: var(--mono); font-size: 12px; opacity: .75; font-variant-numeric: tabular-nums; }
+.rois .meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot2 { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.dot2.prog { background: #e8b221; border-color: #e8b221; }
+.dot2.done { background: #36a457; border-color: #36a457; }
+
+main.view { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+.roibar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.roibar .id { font-family: var(--mono); font-size: 13px; }
+.roibar .model { font-size: 13px; color: var(--muted); }
+.stagewrap { flex: 1; min-height: 0; display: flex; justify-content: center; align-items: flex-start; }
+.stage { position: relative; background: var(--stage); border-radius: 6px; overflow: hidden;
+  width: min(100%, calc(100vh - 150px)); aspect-ratio: 1; max-width: 100%; }
+.stage img, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stage canvas { touch-action: none; cursor: crosshair; }
+.stage .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #c9cbd6; font-size: 14px; }
+
+.side { display: flex; flex-direction: column; gap: 14px; padding: 12px; overflow-y: auto; }
+.side h2 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.zoom { width: 100%; aspect-ratio: 1; background: var(--stage); border-radius: 6px; display: block; }
+.zoomcap { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 4px; }
+.palette { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.lab { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1.5px solid var(--line);
+  border-radius: 6px; cursor: pointer; font-size: 14px; }
+.lab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lab[aria-pressed="true"] { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+.lab .sw { width: 14px; height: 14px; border-radius: 3px; }
+.lab kbd { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.btn { all: unset; box-sizing: border-box; padding: 7px 11px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 13px; background: var(--bg); }
+.btn:hover { border-color: var(--muted); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 700; }
+.btn[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+label.chk { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+textarea { font: inherit; font-size: 14px; width: 100%; box-sizing: border-box; min-height: 64px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; }
+.legend { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.legend b { color: var(--fg); font-weight: 700; }
+.counts { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+input[type=range] { width: 120px; accent-color: var(--accent); }
+input[type=file] { display: none; }
+
+@media (max-width: 1100px) { .app { grid-template-columns: 220px minmax(0, 1fr); height: auto; } .side { grid-column: 1 / -1; } }
+@media (max-width: 720px) { .app { grid-template-columns: minmax(0, 1fr); } aside.list { max-height: 260px; } .stage { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header class="top">
+    <h1>ROI Patch Review</h1>
+    <span class="sub" id="setinfo">Loading review set…</span>
+    <span class="progress" id="progress"></span>
+    <span class="source" id="sourceInfo"><span class="dot"></span><span id="sourceText">—</span></span>
+  </header>
+
+  <div class="banner" id="loadBanner">
+    <span id="bannerMsg">Couldn't load <code>manifest.json</code> over the network.</span>
+    <button class="btn primary" id="openFolderBanner">Open the dataset folder…</button>
+  </div>
+
+  <aside class="list" aria-label="ROIs">
+    <div class="filters">
+      <select id="fPatient" aria-label="Patient"><option value="">All patients</option></select>
+      <select id="fStatus" aria-label="Status">
+        <option value="">All</option><option value="todo">Not reviewed</option><option value="done">Reviewed</option>
+      </select>
+    </div>
+    <ul class="rois" id="roiList"></ul>
+  </aside>
+
+  <main class="view">
+    <div class="roibar">
+      <span class="id" id="roiId">—</span>
+      <span class="model" id="roiModel"></span>
+      <span class="row" style="margin-left:auto">
+        <button class="btn" id="prev" title="Previous ROI (←)">← Prev</button>
+        <button class="btn" id="next" title="Next ROI (→)">Next →</button>
+      </span>
+    </div>
+    <div class="stagewrap">
+      <div class="stage" id="stage">
+        <img id="tile" alt="ROI tile">
+        <canvas id="overlay" aria-label="Patch grid: drag to paint the selected label"></canvas>
+        <div class="loading" id="loading">Loading image…</div>
+      </div>
+    </div>
+  </main>
+
+  <section class="side" aria-label="Labelling">
+    <div>
+      <h2>Zoom · 3 × 3 patches</h2>
+      <canvas class="zoom" id="zoom" width="480" height="480"></canvas>
+      <div class="zoomcap" id="zoomcap">Hover a patch to magnify it</div>
+    </div>
+
+    <div>
+      <h2>Paint label</h2>
+      <div class="palette" id="palette"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="undo" title="Undo (Ctrl+Z)">Undo</button>
+        <span class="counts" id="counts"></span>
+      </div>
+    </div>
+
+    <div>
+      <h2>Show</h2>
+      <label class="chk"><input type="checkbox" id="showSug" checked> Model suggestions (dashed)</label>
+      <label class="chk"><input type="checkbox" id="showGrid" checked> Patch grid</label>
+      <label class="chk">Fill <input type="range" id="alpha" min="0" max="60" value="22"></label>
+    </div>
+
+    <div>
+      <h2>Whole ROI</h2>
+      <div class="row" id="verdict"></div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="acceptRest"> Accept suggestions for patches I did not change</label>
+      <textarea id="note" placeholder="Notes" style="margin-top:8px"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn primary" id="doneNext">Mark reviewed &amp; next</button>
+        <button class="btn" id="reopen" hidden>Reopen</button>
+      </div>
+    </div>
+
+    <div>
+      <h2>Save file</h2>
+      <div class="row">
+        <button class="btn" id="openFolder">Open local folder…</button>
+        <button class="btn" id="exportBtn">Copy / download labels.json</button>
+        <button class="btn" id="importBtn">Import labels.json</button>
+        <input type="file" id="importFile" accept="application/json">
+      </div>
+    </div>
+
+    <p class="legend" id="legend">
+      <b>Dashed</b> = model suggestion, <b>solid</b> = your label.
+      Keys: number keys select a label · 0 Reset · ←/→ ROI · Ctrl+Z undo.
+    </p>
+  </section>
+</div>
+
+<script>
+/* ================================================================ data contract =============
+ * A review set is a folder with:
+ *   manifest.json   { dataset_id, model, unit, legend: [string], classes: [{code,name,color,key}],
+ *                      rois: [{id, patient, slide, x0, y0, n_tumour, grid: [[code|null, ...], ...]}] }
+ *   tiles/<id>.jpg   one image per ROI
+ *   labels.json      written by this page: { "<roi id>": { labels: {"row-col": code}, accept_rest,
+ *                      verdict, note, reviewed, updated_at } }
+ * The page never assumes where the folder lives — see the Source section below.
+ * ============================================================================================ */
+const N = 16;
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+let LABELS = [], VERDICT_CODES = [];
+let ROIS = [], cur = 0, active = null, painting = false, stroke = null, hover = null;
+const reviews = {};               // roi id -> review doc body
+const undoStack = [];             // strokes in the current ROI: {id, changes:[[key, prev]]}
+
+function blank(r) { return { roi_id: r.id, patient: r.patient, slide: r.slide, labels: {}, accept_rest: false, verdict: null, note: "", reviewed: false }; }
+function rev(r) { return reviews[r.id] || (reviews[r.id] = blank(r)); }
+function status(r) { const v = reviews[r.id]; if (!v) return "todo"; if (v.reviewed) return "done"; return Object.keys(v.labels || {}).length || v.verdict || v.note ? "prog" : "todo"; }
+
+/* ================================================================ Source =====================
+ * Two interchangeable backends behind one interface: manifest(), labels(), imageURL(id),
+ * save(allReviews). Everything above this line never knows which one is active. */
+const Source = {
+  mode: "none", dirHandle: null, datasetKey: "",
+  async tryFetch() {
+    const m = await (await fetch("manifest.json", { cache: "no-store" })).json();
+    this.mode = "http"; this.datasetKey = "prs:" + (m.dataset_id || location.href.split("#")[0]);
+    return m;
+  },
+  async openFolder() {
+    const dir = await window.showDirectoryPicker();
+    const m = JSON.parse(await (await dir.getFileHandle("manifest.json").then((h) => h.getFile())).text());
+    this.mode = "fs"; this.dirHandle = dir;
+    this.datasetKey = "prs:" + (m.dataset_id || "fs:" + dir.name);
+    return m;
+  },
+  async labels() {
+    if (this.mode === "fs") {
+      try { return JSON.parse(await (await this.dirHandle.getFileHandle("labels.json").then((h) => h.getFile())).text()); }
+      catch { return {}; }
+    }
+    try { const r = await fetch("labels.json", { cache: "no-store" }); if (r.ok) return await r.json(); } catch {}
+    try { return JSON.parse(localStorage.getItem(this.datasetKey) || "{}"); } catch { return {}; }
+  },
+  async imageURL(id) {
+    if (this.mode === "fs") {
+      const tiles = await this.dirHandle.getDirectoryHandle("tiles");
+      const file = await tiles.getFileHandle(id + ".jpg").then((h) => h.getFile());
+      return URL.createObjectURL(file);
+    }
+    return "tiles/" + id + ".jpg";
+  },
+  async save(all) {
+    if (this.mode === "fs") {
+      const h = await this.dirHandle.getFileHandle("labels.json", { create: true });
+      const w = await h.createWritable(); await w.write(JSON.stringify(all)); await w.close();
+      return;
+    }
+    try { localStorage.setItem(this.datasetKey, JSON.stringify(all)); } catch (e) { throw e; }
+  },
+};
+
+const pending = {}; let inflight = false;
+function scheduleSave(id) {
+  clearTimeout(pending[id]); setSave("Saving…");
+  pending[id] = setTimeout(flush, 500);
+}
+async function flush() {
+  if (inflight) { pending._retry = setTimeout(flush, 300); return; }
+  inflight = true;
+  try { await Source.save(reviews); setSave(Source.mode === "fs" ? "Saved to folder" : "Saved in this browser"); }
+  catch { setSave("Could not save — use Export to keep a copy", true); }
+  finally { inflight = false; }
+}
+function setSave(t, err) { $("sourceText").textContent = t; $("sourceInfo").classList.toggle("live", !err && !!t); }
+
+// ---------------------------------------------------------------- list
+function renderList() {
+  const fp = $("fPatient").value, fs = $("fStatus").value, ul = $("roiList");
+  ul.replaceChildren();
+  ROIS.forEach((r, i) => {
+    const st = status(r);
+    if (fp && r.patient !== fp) return;
+    if (fs === "done" && st !== "done") return;
+    if (fs === "todo" && st === "done") return;
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.setAttribute("aria-current", i === cur ? "true" : "false");
+    const v = reviews[r.id]?.verdict;
+    b.innerHTML = `<span class="n">${String(i + 1).padStart(2, "0")}</span><span class="meta"></span><span class="dot2 ${st === "done" ? "done" : st === "prog" ? "prog" : ""}"></span>`;
+    b.querySelector(".meta").textContent = `${(r.slide || "").replace(/_001$/, "")} · ${r.id.split("_").pop()}${v ? " · " + v : ""}`;
+    b.onclick = () => open(i);
+    li.append(b); ul.append(li);
+  });
+  const done = ROIS.filter((r) => status(r) === "done").length;
+  $("progress").textContent = `${done} / ${ROIS.length} reviewed`;
+}
+
+// ---------------------------------------------------------------- view
+const img = $("tile"), ov = $("overlay"), zc = $("zoom");
+async function open(i) {
+  cur = (i + ROIS.length) % ROIS.length;
+  const r = ROIS[cur];
+  undoStack.length = 0;
+  $("loading").hidden = false;
+  img.onload = () => { $("loading").hidden = true; draw(); drawZoom(); };
+  img.src = await Source.imageURL(r.id);
+  $("roiId").textContent = r.id;
+  $("roiModel").textContent = [r.n_tumour != null ? `${r.n_tumour} tumour patch${r.n_tumour === 1 ? "" : "es"}` : null,
+                               r.x0 != null ? `x0 ${r.x0}, y0 ${r.y0}` : null].filter(Boolean).join(" · ");
+  syncPanel(); renderList(); draw();
+}
+function syncPanel() {
+  const r = ROIS[cur], v = rev(r);
+  $("acceptRest").checked = !!v.accept_rest;
+  if (document.activeElement !== $("note")) $("note").value = v.note || "";
+  $("verdict").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v.verdict)));
+  $("reopen").hidden = !v.reviewed;
+  $("doneNext").textContent = v.reviewed ? "Next" : "Mark reviewed & next";
+  const counts = {}; Object.values(v.labels || {}).forEach((x) => counts[x] = (counts[x] || 0) + 1);
+  const n = Object.values(counts).reduce((a, b) => a + b, 0);
+  $("counts").textContent = `labelled: ${n}` + (n ? "  (" + LABELS.map((l) => `${l.code} ${counts[l.code] || 0}`).join(" · ") + ")" : "");
+}
+
+function sizeCanvas(cv) {
+  const d = window.devicePixelRatio || 1, w = cv.clientWidth;
+  if (cv.width !== Math.round(w * d)) { cv.width = cv.height = Math.round(w * d); }
+  return cv.width;
+}
+function cellStyle(r, row, col) {
+  const v = rev(r), key = row + "-" + col, own = v.labels?.[key];
+  if (own) return { code: own, solid: true };
+  const sug = r.grid?.[row]?.[col];
+  if (!sug) return null;
+  if (v.accept_rest) return { code: sug, solid: true, accepted: true };
+  if (!$("showSug").checked) return null;
+  return { code: sug, solid: false };
+}
+function colorOf(code) { const l = LABELS.find((x) => x.code === code); return l ? l.color : css("--other"); }
+function draw() {
+  const r = ROIS[cur]; if (!r) return;
+  const W = sizeCanvas(ov), ctx = ov.getContext("2d"), s = W / N, d = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, W, W);
+  const alpha = $("alpha").value / 100;
+  if ($("showGrid").checked) {
+    ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1;
+    for (let i = 1; i < N; i++) { ctx.beginPath(); ctx.moveTo(i * s, 0); ctx.lineTo(i * s, W); ctx.moveTo(0, i * s); ctx.lineTo(W, i * s); ctx.stroke(); }
+  }
+  for (let row = 0; row < N; row++) for (let col = 0; col < N; col++) {
+    const st = cellStyle(r, row, col); if (!st) continue;
+    const c = colorOf(st.code), x = col * s, y = row * s;
+    ctx.globalAlpha = st.solid ? alpha : alpha * 0.5; ctx.fillStyle = c; ctx.fillRect(x, y, s, s);
+    ctx.globalAlpha = 1; ctx.strokeStyle = c;
+    ctx.lineWidth = st.solid ? 3 * d : 1.5 * d; ctx.setLineDash(st.solid ? [] : [5 * d, 4 * d]);
+    const inset = ctx.lineWidth / 2 + 1; ctx.strokeRect(x + inset, y + inset, s - 2 * inset, s - 2 * inset);
+  }
+  ctx.setLineDash([]);
+  if (hover) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2 * d; ctx.strokeRect(hover.col * s + 1, hover.row * s + 1, s - 2, s - 2); }
+}
+function drawZoom() {
+  const r = ROIS[cur], ctx = zc.getContext("2d"), W = zc.width;
+  ctx.fillStyle = css("--stage"); ctx.fillRect(0, 0, W, W);
+  if (!img.complete || !img.naturalWidth || !hover) return;
+  const p = img.naturalWidth / N;
+  const c0 = Math.min(Math.max(hover.col - 1, 0), N - 3), r0 = Math.min(Math.max(hover.row - 1, 0), N - 3);
+  ctx.drawImage(img, c0 * p, r0 * p, 3 * p, 3 * p, 0, 0, W, W);
+  const s = W / 3, st = cellStyle(r, hover.row, hover.col);
+  ctx.lineWidth = 3; ctx.strokeStyle = st ? colorOf(st.code) : "#ffffff"; ctx.setLineDash(st && !st.solid ? [8, 6] : []);
+  ctx.strokeRect((hover.col - c0) * s + 2, (hover.row - r0) * s + 2, s - 4, s - 4); ctx.setLineDash([]);
+  const lab = st ? (LABELS.find((l) => l.code === st.code)?.name || st.code) + (st.solid ? "" : " (suggested)") : "no tissue mask";
+  $("zoomcap").textContent = `row ${hover.row} · col ${hover.col}` + (r.x0 != null ? ` · x ${r.x0 + hover.col * 256} y ${r.y0 + hover.row * 256}` : "") + ` · ${lab}`;
+}
+
+// ---------------------------------------------------------------- painting
+function cellAt(e) {
+  const b = ov.getBoundingClientRect(), col = Math.floor((e.clientX - b.left) / b.width * N), row = Math.floor((e.clientY - b.top) / b.height * N);
+  return row >= 0 && row < N && col >= 0 && col < N ? { row, col } : null;
+}
+function paint(cell) {
+  const r = ROIS[cur], v = rev(r), key = cell.row + "-" + cell.col, prev = v.labels[key] ?? null;
+  if (prev === active) return;
+  if (stroke && !stroke.changes.some(([k]) => k === key)) stroke.changes.push([key, prev]);
+  if (active === null) delete v.labels[key]; else v.labels[key] = active;
+  draw(); drawZoom(); syncPanel();
+}
+ov.addEventListener("pointerdown", (e) => { const c = cellAt(e); if (!c) return; painting = true; ov.setPointerCapture(e.pointerId); stroke = { id: ROIS[cur].id, changes: [] }; paint(c); });
+ov.addEventListener("pointermove", (e) => { const c = cellAt(e); if (c && (!hover || c.row !== hover.row || c.col !== hover.col)) { hover = c; draw(); drawZoom(); } if (painting && c) paint(c); });
+ov.addEventListener("pointerup", endStroke);
+ov.addEventListener("pointercancel", endStroke);
+function endStroke() {
+  if (!painting) return; painting = false;
+  if (stroke && stroke.changes.length) { undoStack.push(stroke); scheduleSave(stroke.id); renderList(); }
+  stroke = null;
+}
+function undo() {
+  const s = undoStack.pop(); if (!s) return;
+  const v = reviews[s.id];
+  s.changes.forEach(([k, prev]) => { if (prev === null) delete v.labels[k]; else v.labels[k] = prev; });
+  scheduleSave(s.id); draw(); drawZoom(); syncPanel(); renderList();
+}
+
+// ---------------------------------------------------------------- controls
+function buildPalette() {
+  const pal = $("palette");
+  pal.replaceChildren();
+  [...LABELS, { code: null, name: "Reset", key: "0", color: css("--line") }].forEach((l) => {
+    const b = document.createElement("button");
+    b.className = "lab"; b.dataset.code = l.code ?? "";
+    b.innerHTML = `<span class="sw" style="background:${l.color}"></span><span></span><kbd>${l.key}</kbd>`;
+    b.children[1].textContent = l.name;
+    b.onclick = () => setActive(l.code);
+    pal.append(b);
+  });
+  const vb = $("verdict"); vb.replaceChildren();
+  VERDICT_CODES.forEach((code) => {
+    const name = (LABELS.find((l) => l.code === code) || { name: code }).name;
+    const b = document.createElement("button");
+    b.className = "btn"; b.dataset.v = code; b.textContent = name;
+    b.onclick = () => { const v = rev(ROIS[cur]); v.verdict = v.verdict === code ? null : code; syncPanel(); renderList(); scheduleSave(ROIS[cur].id); };
+    vb.append(b);
+  });
+  setActive(LABELS[0]?.code ?? null);
+}
+function setActive(code) { active = code; $("palette").querySelectorAll(".lab").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.code || null) === code))); }
+
+function buildControls() {
+  ["showSug", "showGrid", "alpha"].forEach((id) => $(id).addEventListener("input", draw));
+  $("acceptRest").onchange = (e) => { rev(ROIS[cur]).accept_rest = e.target.checked; draw(); scheduleSave(ROIS[cur].id); };
+  let nt; $("note").oninput = (e) => { rev(ROIS[cur]).note = e.target.value; clearTimeout(nt); nt = setTimeout(() => { scheduleSave(ROIS[cur].id); renderList(); }, 400); };
+  $("doneNext").onclick = () => { const v = rev(ROIS[cur]); if (!v.reviewed) { v.reviewed = true; scheduleSave(ROIS[cur].id); } open(cur + 1); };
+  $("reopen").onclick = () => { rev(ROIS[cur]).reviewed = false; scheduleSave(ROIS[cur].id); syncPanel(); renderList(); };
+  $("prev").onclick = () => open(cur - 1);
+  $("next").onclick = () => open(cur + 1);
+  $("undo").onclick = undo;
+  $("fPatient").onchange = $("fStatus").onchange = renderList;
+  window.addEventListener("resize", draw);
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest("textarea, input, select")) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); return; }
+    if (e.key === "0") { setActive(null); return; }
+    const l = LABELS.find((x) => x.key === e.key); if (l) { setActive(l.code); return; }
+    if (e.key === "ArrowRight") open(cur + 1);
+    if (e.key === "ArrowLeft") open(cur - 1);
+  });
+
+  const canPickFolder = "showDirectoryPicker" in window;
+  $("openFolder").hidden = $("openFolderBanner").hidden = !canPickFolder;
+  const useFolder = async () => {
+    try {
+      const m = await Source.openFolder();
+      Object.assign(reviews, await Source.labels());
+      await loadManifest(m, true);
+      $("loadBanner").classList.remove("show");
+      setSave("Reading from " + Source.dirHandle.name);
+    } catch (e) { if (e.name !== "AbortError") setSave("Could not open that folder: " + e.message, true); }
+  };
+  $("openFolder").onclick = useFolder;
+  $("openFolderBanner").onclick = useFolder;
+
+  $("exportBtn").onclick = async () => {
+    const text = JSON.stringify(reviews, null, 2);
+    try { await navigator.clipboard.writeText(text); setSave("labels.json copied to clipboard"); } catch {}
+    const downloads = window.claude ? await claude.use("downloads").catch(() => null) : null;
+    if (downloads) { try { await downloads.save({ filename: "labels.json", data: text }); return; } catch {} }
+    try {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      a.download = "labels.json"; a.click(); URL.revokeObjectURL(a.href);
+    } catch {}
+  };
+  $("importBtn").onclick = () => $("importFile").click();
+  $("importFile").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const incoming = JSON.parse(await f.text());
+      Object.assign(reviews, incoming);
+      renderList(); syncPanel(); draw(); drawZoom();
+      setSave(`Imported ${Object.keys(incoming).length} review(s) — now Saved will write them out`);
+    } catch (err) { setSave("Could not read that file: " + err.message, true); }
+    e.target.value = "";
+  };
+}
+
+// ---------------------------------------------------------------- boot
+const DEFAULT_LEGEND = $("legend").innerHTML;
+async function loadManifest(m, keepPosition) {
+  LABELS = (m.classes || []).map((c) => ({ ...c, color: c.color || css("--other") }));
+  LABELS.push({ code: "U", name: "Unsure", key: String(LABELS.length + 1), color: css("--unsure") });
+  VERDICT_CODES = [...LABELS.map((l) => l.code)];
+  ROIS = m.rois || [];
+  buildPalette();
+  const patients = [...new Set(ROIS.map((r) => r.patient).filter(Boolean))];
+  $("fPatient").replaceChildren(new Option("All patients", ""));
+  patients.forEach((p) => $("fPatient").append(new Option(p, p)));
+  const bits = [`${ROIS.length} ROIs`, patients.length ? patients.join(", ") : null, m.model ? "model " + m.model : null, m.unit];
+  $("setinfo").textContent = bits.filter(Boolean).join(" · ");
+  $("legend").innerHTML = (m.legend?.length ? m.legend.map((l) => `<b>·</b> ${l}`).join("<br>") + "<br>" : "") + DEFAULT_LEGEND;
+  const fromHash = ROIS.findIndex((r) => "#" + r.id === location.hash);
+  const target = keepPosition ? ROIS.findIndex((r) => r.id === ROIS[cur]?.id) : -1;
+  await open(target >= 0 ? target : fromHash >= 0 ? fromHash : 0);
+}
+async function boot() {
+  buildControls();
+  try {
+    const m = await Source.tryFetch();
+    Object.assign(reviews, await Source.labels());
+    await loadManifest(m);
+    setSave("http" === Source.mode ? "Saved in this browser (Export to keep a copy)" : "");
+  } catch (e) {
+    $("bannerMsg").textContent = "showDirectoryPicker" in window
+      ? "Couldn't load manifest.json over the network (opened as a local file?)."
+      : "Couldn't load manifest.json, and this browser can't open a local folder — serve this folder over HTTP instead (e.g. `python3 -m http.server`).";
+    $("loadBanner").classList.add("show");
+    $("setinfo").textContent = "Waiting for a dataset…";
+  }
+}
+boot();
+</script>
